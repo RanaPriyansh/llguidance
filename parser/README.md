@@ -33,3 +33,39 @@ while the logits are computed on the GPU or other CPU cores.
 The `commit_token()` function is very fast and can be called in the main loop.
 
 See [sample parser](../sample_parser/src/minimal.rs) for an example of how to use this crate.
+
+## Matcher cancellation
+
+Obtain `Matcher::cancellation_handle()` before moving the matcher to a worker.
+Call `CancellationHandle::cancel()` from another thread when the result is no longer needed.
+The call sets a permanent request and does not wait for the worker.
+Join the worker before using or dropping its matcher.
+
+The matcher checks the request during parser, lexer, trie, and slice work.
+An observed request returns the typed `Cancelled` error and sets `StopReason::Cancelled`.
+Cancellation cannot return a successful partial mask or force EOS.
+Reset and rollback cannot resume a cancelled matcher.
+A non-cancellation error already stored in the matcher keeps its original cause.
+
+Cloned handles control the same matcher and can outlive it.
+Cloned matchers have independent cancellation state, including `deep_clone()`.
+A matcher clone retains a request present when its cancellation state is sampled.
+Later requests to the original matcher do not affect the clone.
+
+Cancellation is cooperative. A dependency call, tokenizer callback, shared lexer lock wait,
+or cache insertion must finish before the next check.
+A complete result can win a race with a request after the final check.
+There is no fixed cancellation deadline.
+
+For C, use `llg_matcher_get_cancellation_handle()`, `llg_cancel()`, and
+`llg_free_cancellation_handle()`. Each cloned C handle requires its own free call.
+Do not free a handle allocation while another thread uses that allocation.
+Only cancellation handle operations may run concurrently with matcher mutation.
+After cancellation, mask computation returns `-1` and `llg_matcher_get_mask()` returns null.
+
+The [cancellation example](examples/cancellation.rs) compares mask work after a fixed progress checkpoint:
+
+```sh
+cargo run -p llguidance --release --example cancellation -- baseline 30
+cargo run -p llguidance --release --example cancellation -- cancel 30
+```

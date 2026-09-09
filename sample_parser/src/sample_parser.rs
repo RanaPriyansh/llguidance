@@ -241,7 +241,7 @@ fn main() {
                 tokens.push(t);
                 // Consume fast-forward tokens — grammar-forced tokens that bypass sampling.
                 // These are appended directly to the output (like speculative decoding at 100%).
-                let ff = constraint.consume_ff_tokens();
+                let ff = constraint.consume_ff_tokens().unwrap();
                 tokens.extend_from_slice(&ff);
                 lens.push(ff.len());
                 if constraint.is_stopped() {
@@ -324,7 +324,7 @@ fn main() {
         idx += 1;
 
         // Get fast-forward tokens — tokens the grammar forces deterministically.
-        let splice = constraint.compute_ff_tokens();
+        let splice = constraint.compute_ff_tokens().unwrap();
 
         // Verify the fast-forward tokens match what's in our input file.
         // In production, ff_tokens are appended to the output without LLM sampling.

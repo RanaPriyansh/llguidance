@@ -538,13 +538,13 @@ impl LLMatcher {
         self.inner.reset().is_ok()
     }
 
-    fn compute_ff_tokens(&mut self) -> Vec<TokenId> {
-        self.inner.compute_ff_tokens()
+    fn compute_ff_tokens(&mut self) -> PyResult<Vec<TokenId>> {
+        self.inner.compute_ff_tokens().map_err(val_error)
     }
 
-    fn compute_ff_bytes(&mut self) -> Cow<'_, [u8]> {
-        let bytes = self.inner.compute_ff_bytes();
-        Cow::Owned(bytes)
+    fn compute_ff_bytes(&mut self) -> PyResult<Cow<'_, [u8]>> {
+        let bytes = self.inner.compute_ff_bytes().map_err(val_error)?;
+        Ok(Cow::Owned(bytes))
     }
 
     fn try_consume_tokens(&mut self, tokens: Vec<TokenId>) -> usize {

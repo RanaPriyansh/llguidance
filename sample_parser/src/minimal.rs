@@ -109,7 +109,7 @@ fn main() {
         //     These tokens bypass the LLM entirely (zero entropy / no choice).
         //     In production, they are appended to the output and processed like a
         //     short prefill, similar to speculative decoding with 100% acceptance.
-        let splice = constraint.compute_ff_tokens();
+        let splice = constraint.compute_ff_tokens().unwrap();
 
         // Verify ff_tokens match our expected input (sanity check on test data).
         if tokens[idx..idx + splice.len()] != splice {
