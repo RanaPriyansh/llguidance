@@ -1,4 +1,4 @@
-//! Compare mask work with cancellation after 4,096 to 4,351 byte visits.
+//! Compare cancellable mask work after 4,096 to 4,351 byte visits.
 //! Run with `cargo run -p llguidance --release --example cancellation -- cancel 30`.
 //! Replace `cancel` with `baseline` for the uncancelled control.
 
@@ -158,8 +158,8 @@ fn main() -> Result<()> {
         let mut parser =
             factory.create_parser(TopLevelGrammar::from_lark("start: /[a-z]+/".to_string()))?;
         parser.bias_computer = bias.clone();
-        let mut matcher = Matcher::new(Ok(parser));
-        let handle = matcher.cancellation_handle();
+        let mut matcher = Matcher::new(Ok(parser)).into_cancellable();
+        let handle = matcher.cancellation_handle().unwrap();
         let worker = std::thread::spawn(move || {
             matcher.consume_token(b'a' as TokenId).unwrap();
             let result = matcher.compute_mask();

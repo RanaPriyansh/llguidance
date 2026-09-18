@@ -341,14 +341,16 @@ impl RegexVec {
         state: StateID,
         lexeme_idx: LexemeIdx,
         mut budget: u64,
-        cancellation: &crate::CancellationHandle,
+        cancellation: Option<&crate::CancellationHandle>,
     ) -> Result<bool> {
         let budget0 = budget;
         assert!(self.subsume_possible(state));
         let small = self.get_rx(lexeme_idx);
         let mut res = false;
         for (idx, e) in iter_state(&self.rx_sets, state) {
-            cancellation.check()?;
+            if let Some(cancellation) = cancellation {
+                cancellation.check()?;
+            }
             if !self.subsumable.contains(idx) {
                 continue;
             }
@@ -370,7 +372,9 @@ impl RegexVec {
             //     self.exprs.expr_to_string(e),
             //     is_contained
             // );
-            cancellation.check()?;
+            if let Some(cancellation) = cancellation {
+                cancellation.check()?;
+            }
             if is_contained {
                 res = true;
                 break;

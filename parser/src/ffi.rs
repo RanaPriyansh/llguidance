@@ -1749,14 +1749,19 @@ pub extern "C" fn llg_matcher_get_mask_byte_size(matcher: &LlgMatcher) -> usize 
 ///
 /// Call this while `matcher` is idle. The returned handle can outlive the
 /// matcher. Free it with [`llg_free_cancellation_handle()`]. Cancellation
+/// becomes enabled for the matcher before the handle is returned. Cancellation
 /// handle operations may run while a worker mutates the matcher. Join the
 /// worker before accessing or freeing the matcher.
 #[no_mangle]
 pub extern "C" fn llg_matcher_get_cancellation_handle(
-    matcher: &LlgMatcher,
+    matcher: &mut LlgMatcher,
 ) -> *mut LlgCancellationHandle {
+    matcher.matcher.enable_cancellation();
     Box::into_raw(Box::new(LlgCancellationHandle {
-        handle: matcher.matcher.cancellation_handle(),
+        handle: matcher
+            .matcher
+            .cancellation_handle()
+            .expect("cancellation is enabled"),
     }))
 }
 

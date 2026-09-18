@@ -36,7 +36,10 @@ See [sample parser](../sample_parser/src/minimal.rs) for an example of how to us
 
 ## Matcher cancellation
 
-Obtain `Matcher::cancellation_handle()` before moving the matcher to a worker.
+Rust matchers do not enable cancellation by default. Call
+`Matcher::into_cancellable()` before moving a matcher to a worker, then obtain
+`Matcher::cancellation_handle()`.
+`Matcher::cancellation_handle()` returns `None` until cancellation is enabled.
 Call `CancellationHandle::cancel()` from another thread when the result is no longer needed.
 The call sets a permanent request and does not wait for the worker.
 Join the worker before using or dropping its matcher.
@@ -57,7 +60,8 @@ or cache insertion must finish before the next check.
 A complete result can win a race with a request after the final check.
 There is no fixed cancellation deadline.
 
-For C, use `llg_matcher_get_cancellation_handle()`, `llg_cancel()`, and
+For C, `llg_matcher_get_cancellation_handle()` enables cancellation on an idle matcher.
+Use it with `llg_cancel()` and
 `llg_free_cancellation_handle()`. Each cloned C handle requires its own free call.
 Do not free a handle allocation while another thread uses that allocation.
 Only cancellation handle operations may run concurrently with matcher mutation.
@@ -68,4 +72,15 @@ The [cancellation example](examples/cancellation.rs) compares mask work after a 
 ```sh
 cargo run -p llguidance --release --example cancellation -- baseline 30
 cargo run -p llguidance --release --example cancellation -- cancel 30
+```
+
+The `compute_mask` benchmark reads `LLGUIDANCE_BENCH_CANCELLATION` during setup.
+Unset the variable or set it to `disabled` for the default path.
+Set it to `enabled` to opt in before measured steady-state operations.
+The `first_mask` case includes matcher construction and opt-in allocation in its measured cold-start path.
+Other selected cases activate cancellation before their measured operations.
+
+```sh
+LLGUIDANCE_BENCH_CANCELLATION=disabled cargo bench -p llguidance --bench compute_mask
+LLGUIDANCE_BENCH_CANCELLATION=enabled cargo bench -p llguidance --bench compute_mask
 ```

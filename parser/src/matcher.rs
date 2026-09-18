@@ -18,7 +18,7 @@ enum MatcherState {
 
 /// This is meant to be used in server-side scenarios.
 /// The Constraint interface is more for usage in Python Guidance.
-pub struct Matcher(MatcherState, CancellationHandle);
+pub struct Matcher(MatcherState, Option<CancellationHandle>);
 
 impl Clone for Matcher {
     fn clone(&self) -> Self {
@@ -38,40 +38,69 @@ impl Matcher {
                     if parser.is_fresh() {
                         parser.start_without_prompt();
                     }
-                    let cancellation = CancellationHandle::default();
-                    parser.parser.set_cancellation_handle(cancellation.clone());
-                    Matcher(MatcherState::Normal(MatcherInner { parser }), cancellation)
+                    Matcher(MatcherState::Normal(MatcherInner { parser }), None)
                 }
             }
-            Err(e) => Matcher(
-                MatcherState::Error(e.to_string()),
-                CancellationHandle::default(),
-            ),
+            Err(e) => Matcher(MatcherState::Error(e.to_string()), None),
         }
     }
 
-    /// Return a handle for this matcher. Cloned handles share its cancellation state.
+    /// Enable cancellation for this matcher.
+    pub fn into_cancellable(mut self) -> Self {
+        self.enable_cancellation();
+        self
+    }
+
+    pub(crate) fn enable_cancellation(&mut self) {
+        if self.1.is_some() {
+            return;
+        }
+        let cancellation = CancellationHandle::default();
+        if let MatcherState::Normal(inner) = &mut self.0 {
+            inner
+                .parser
+                .parser
+                .set_cancellation_handle(cancellation.clone());
+        }
+        self.1 = Some(cancellation);
+    }
+
+    /// Return a handle when cancellation is enabled. Cloned handles share its cancellation state.
     ///
     /// Matcher clones sample the request when cloning starts. Each usable clone gets
     /// independent cancellation state. A clone that observes cancellation stays cancelled.
-    pub fn cancellation_handle(&self) -> CancellationHandle {
+    pub fn cancellation_handle(&self) -> Option<CancellationHandle> {
         self.1.clone()
     }
 
     /// An existing error keeps its original cause after a later cancellation request.
     pub fn is_cancelled(&self) -> bool {
-        !matches!(self.0, MatcherState::Error(_)) && self.1.is_cancelled()
+        !matches!(self.0, MatcherState::Error(_))
+            && self
+                .1
+                .as_ref()
+                .is_some_and(CancellationHandle::is_cancelled)
     }
 
     fn with_inner<T>(&mut self, f: impl FnOnce(&mut MatcherInner) -> Result<T>) -> Result<T> {
         match &mut self.0 {
             MatcherState::Normal(inner) => {
-                let r = self.1.check().map_err(anyhow::Error::from).and_then(|()| {
-                    panic_utils::catch_unwind(std::panic::AssertUnwindSafe(|| f(inner)))
-                });
+                let r = self
+                    .1
+                    .as_ref()
+                    .map_or(Ok(()), CancellationHandle::check)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|()| {
+                        panic_utils::catch_unwind(std::panic::AssertUnwindSafe(|| f(inner)))
+                    });
                 #[cfg(test)]
                 crate::cancellation::checkpoint("publication");
-                if self.1.is_cancelled() || r.as_ref().is_err_and(|e| e.is::<Cancelled>()) {
+                if self
+                    .1
+                    .as_ref()
+                    .is_some_and(CancellationHandle::is_cancelled)
+                    || r.as_ref().is_err_and(|e| e.is::<Cancelled>())
+                {
                     self.0 = MatcherState::Cancelled;
                     return Err(Cancelled.into());
                 }
@@ -91,18 +120,26 @@ impl Matcher {
 
     // Sampling the signal defines the clone's independence from later requests.
     fn clone_inner(&self, deep: bool) -> Self {
-        let cancellation = self.1.snapshot();
+        let cancellation = self.1.as_ref().map(CancellationHandle::snapshot);
         let state = match &self.0 {
             MatcherState::Error(e) => MatcherState::Error(e.clone()),
             MatcherState::Cancelled => MatcherState::Cancelled,
-            MatcherState::Normal(_) if cancellation.is_cancelled() => MatcherState::Cancelled,
+            MatcherState::Normal(_)
+                if cancellation
+                    .as_ref()
+                    .is_some_and(CancellationHandle::is_cancelled) =>
+            {
+                MatcherState::Cancelled
+            }
             MatcherState::Normal(inner) => {
                 let mut parser = if deep {
                     inner.parser.deep_clone()
                 } else {
                     inner.parser.clone()
                 };
-                parser.parser.set_cancellation_handle(cancellation.clone());
+                if let Some(cancellation) = cancellation.as_ref() {
+                    parser.parser.set_cancellation_handle(cancellation.clone());
+                }
                 MatcherState::Normal(MatcherInner { parser })
             }
         };

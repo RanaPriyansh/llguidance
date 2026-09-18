@@ -3,7 +3,7 @@
 int llguidance_c_header_compiles(void) {
   struct LlgMatcher *matcher = 0;
   struct LlgCancellationHandle *handle = 0;
-  struct LlgCancellationHandle *(*get_handle)(const struct LlgMatcher *) =
+  struct LlgCancellationHandle *(*get_handle)(struct LlgMatcher *) =
       llg_matcher_get_cancellation_handle;
   struct LlgCancellationHandle *(*clone_handle)(
       const struct LlgCancellationHandle *) = llg_clone_cancellation_handle;

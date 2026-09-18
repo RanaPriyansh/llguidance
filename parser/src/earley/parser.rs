@@ -352,7 +352,7 @@ impl Captures {
 
 #[derive(Clone)]
 struct ParserState {
-    cancellation: CancellationHandle,
+    cancellation: Option<CancellationHandle>,
     grammar: Arc<CGrammar>,
     tok_env: TokEnv,
     scratch: Scratch,
@@ -591,6 +591,21 @@ macro_rules! ensure_internal {
 }
 
 impl ParserState {
+    #[inline(always)]
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(CancellationHandle::is_cancelled)
+    }
+
+    #[inline(always)]
+    fn check_cancelled(&self) -> Result<()> {
+        self.cancellation
+            .as_ref()
+            .map_or(Ok(()), CancellationHandle::check)
+            .map_err(Into::into)
+    }
+
     // Create a new state for an empty parser.
     // The parser starts in definitive mode.
     fn new(
@@ -634,7 +649,7 @@ impl ParserState {
             INVALID_TOKEN
         };
         let mut r = ParserState {
-            cancellation: CancellationHandle::default(),
+            cancellation: None,
             grammar,
             tok_env,
             special_token_marker_token: special_marker_token,
@@ -757,7 +772,7 @@ impl ParserState {
     }
 
     fn compute_bias(&mut self, computer: &dyn BiasComputer, start: &[u8]) -> SimpleVob {
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return computer.trie().alloc_token_set();
         }
         let t0 = Instant::now();
@@ -790,7 +805,7 @@ impl ParserState {
             computer.compute_bias(&mut r, start)
         });
 
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return set;
         }
 
@@ -819,7 +834,7 @@ impl ParserState {
         }
 
         // Only complete masks can enter the cache.
-        if start.is_empty() && !self.cancellation.is_cancelled() {
+        if start.is_empty() && !self.is_cancelled() {
             let curr_state = self.lexer_state();
             self.bias_cache = Some(BiasCache {
                 lexer_state: curr_state.lexer_state,
@@ -1217,7 +1232,7 @@ impl ParserState {
         }
 
         for (bidx, &b) in tok_bytes.iter().enumerate() {
-            self.cancellation.check()?;
+            self.check_cancelled()?;
             check_lexer_max_tokens = false;
             let applied_idx = self.byte_to_token_idx.len();
             if applied_idx >= self.bytes.len() {
@@ -1228,7 +1243,7 @@ impl ParserState {
                 self.row_infos[row_idx].apply_token_idx(self.token_idx);
 
                 let (ok, bt) = self.try_push_byte_definitive(Some(b));
-                self.cancellation.check()?;
+                self.check_cancelled()?;
                 if !ok {
                     bail!(
                         "token {:?} doesn't satisfy the grammar; byte {:?} fails parse",
@@ -1395,7 +1410,7 @@ impl ParserState {
         trace!("force_bytes lexer_stack {}", self.lexer_stack.len());
         self.with_items_limit(self.limits.step_max_items, "ff_tokens", |s| {
             while let Some(b) = s.forced_byte() {
-                if s.cancellation.is_cancelled() {
+                if s.is_cancelled() {
                     break;
                 }
                 debug!("  forced: {:?} 0x{:x}", b as char, b);
@@ -1594,7 +1609,7 @@ impl ParserState {
     // the parse with 'byte') into the parse in definitive mode.
     // Returns 'false' if this is not possible.
     fn try_push_byte_definitive(&mut self, byte: Option<u8>) -> (bool, usize) {
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return (false, 0);
         }
         assert!(self.scratch.definitive);
@@ -1603,9 +1618,12 @@ impl ParserState {
 
         let res = if let Some(b) = byte {
             self.stats.definitive_bytes += 1;
-            self.shared_box
-                .lexer_mut()
-                .advance(curr.lexer_state, b, true, Some(&self.cancellation))
+            self.shared_box.lexer_mut().advance(
+                curr.lexer_state,
+                b,
+                true,
+                self.cancellation.as_ref(),
+            )
         } else {
             let lexeme = self.lexer_mut().force_lexeme_end(curr.lexer_state);
             if lexeme.is_error() {
@@ -1652,7 +1670,7 @@ impl ParserState {
     /// parser at this point, and returns it.  If there is
     /// no such byte, forced_byte() returns 'None'.
     fn forced_byte(&mut self) -> Option<u8> {
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return None;
         }
         if self.is_accepting() {
@@ -1875,7 +1893,7 @@ impl ParserState {
         // in time" at the beginning of the creation of
         // each row
         for i in items {
-            if self.cancellation.is_cancelled() {
+            if self.is_cancelled() {
                 return false;
             }
             let item = self.scratch.items[i];
@@ -1988,7 +2006,7 @@ impl ParserState {
         // instead 'agenda_ptr' is advanced through the combined agenda/chart.
         // Only one pass is made.
         while agenda_ptr < self.scratch.row_end {
-            if self.cancellation.is_cancelled() {
+            if self.is_cancelled() {
                 return;
             }
             let item_idx = agenda_ptr;
@@ -2014,7 +2032,7 @@ impl ParserState {
 
                     // The main completion inference rule (slide 21 in Kallmeyer 2018)
                     for i in self.rows[item.start_pos()].item_indices() {
-                        if self.cancellation.is_cancelled() {
+                        if self.is_cancelled() {
                             return;
                         }
                         let item = self.scratch.items[i];
@@ -2058,7 +2076,7 @@ impl ParserState {
                         }
 
                         for ri in 0..sym_data.rules.len() {
-                            if self.cancellation.is_cancelled() {
+                            if self.is_cancelled() {
                                 return;
                             }
                             if !sym_data.rules_cond[ri].eval(param_dot) {
@@ -2071,7 +2089,7 @@ impl ParserState {
                         }
                     } else {
                         for rule in &sym_data.rules {
-                            if self.cancellation.is_cancelled() {
+                            if self.is_cancelled() {
                                 return;
                             }
                             let new_item = Item::new(*rule, curr_idx);
@@ -2106,7 +2124,7 @@ impl ParserState {
         lex_start: Option<StateID>,
         allow_skip: bool,
     ) -> bool {
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return false;
         }
         let row_len = self.scratch.row_len();
@@ -2237,7 +2255,7 @@ impl ParserState {
         let (grammar_id, max_token_ptr) = self.maybe_pop_grammar_stack(lexeme.idx);
 
         self.process_agenda(curr_idx, lexeme);
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return false;
         }
 
@@ -2408,7 +2426,7 @@ impl ParserState {
             lexer_state: self.shared_box.lexer_mut().transition_start_state(
                 added_row_start_state,
                 transition_byte,
-                Some(&self.cancellation),
+                self.cancellation.as_ref(),
             ),
             byte: transition_byte,
         };
@@ -2479,11 +2497,11 @@ impl ParserState {
                     lexer_state,
                     b,
                     trace_here,
-                    Some(&self.cancellation),
+                    self.cancellation.as_ref(),
                 );
                 #[cfg(test)]
                 crate::cancellation::checkpoint("hidden");
-                if self.cancellation.is_cancelled() {
+                if self.is_cancelled() {
                     self.lexer_stack.truncate(restore_from);
                     self.lexer_stack.extend(removed_states);
                     if self.scratch.definitive {
@@ -2526,7 +2544,7 @@ impl ParserState {
                             // This shouldn't happen though
                             // (the parser was allowing this lexeme and now it doesn't like it)
                             self.lexer_stack.pop();
-                            if self.cancellation.is_cancelled() {
+                            if self.is_cancelled() {
                                 self.lexer_stack.truncate(restore_from);
                                 self.lexer_stack.extend(removed_states);
                                 if self.scratch.definitive {
@@ -2588,7 +2606,7 @@ impl ParserState {
     // This is never inlined anyways, so better make it formal
     #[inline(never)]
     fn advance_parser(&mut self, pre_lexeme: PreLexeme) -> bool {
-        if self.cancellation.is_cancelled() {
+        if self.is_cancelled() {
             return false;
         }
         if self.stats.all_items > self.max_all_items {
@@ -2645,7 +2663,7 @@ impl ParserState {
 
         if scan_res {
             let mut no_hidden = self.lexer_state_for_added_row(lexeme, transition_byte);
-            if self.cancellation.is_cancelled() {
+            if self.is_cancelled() {
                 if self.scratch.definitive {
                     self.row_infos.truncate(no_hidden.row_idx as usize);
                 }
@@ -2722,7 +2740,7 @@ impl<'a> ParserRecognizer<'a> {
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.state.cancellation.is_cancelled()
+        self.state.is_cancelled()
     }
     pub(crate) fn check_subsume(
         &mut self,
@@ -2734,7 +2752,7 @@ impl<'a> ParserRecognizer<'a> {
             state,
             idx,
             budget,
-            &self.state.cancellation,
+            self.state.cancellation.as_ref(),
         )
     }
 
@@ -2800,7 +2818,7 @@ impl Recognizer for ParserRecognizer<'_> {
     #[inline(always)]
     fn try_push_byte(&mut self, byte: u8) -> bool {
         if self.cancellation_poll_remaining == 0 {
-            if self.state.cancellation.is_cancelled() {
+            if self.state.is_cancelled() {
                 // Keep polling after cancellation, before any further parser work.
                 return false;
             }
@@ -2816,7 +2834,7 @@ impl Recognizer for ParserRecognizer<'_> {
             curr.lexer_state,
             byte,
             lexer_logging,
-            Some(&self.state.cancellation),
+            self.state.cancellation.as_ref(),
         );
 
         if ITEM_TRACE {
@@ -2891,11 +2909,11 @@ impl ParserError {
 
 impl Parser {
     pub(crate) fn set_cancellation_handle(&mut self, handle: CancellationHandle) {
-        self.state.cancellation = handle;
+        self.state.cancellation = Some(handle);
     }
 
     pub(crate) fn check_cancelled(&self) -> Result<()> {
-        self.state.cancellation.check().map_err(Into::into)
+        self.state.check_cancelled()
     }
 
     pub fn new(
@@ -2953,7 +2971,7 @@ impl Parser {
     }
 
     pub fn get_error(&self) -> Option<ParserError> {
-        if self.state.cancellation.is_cancelled() {
+        if self.state.is_cancelled() {
             return Some(ParserError::Cancelled);
         }
         let shared = self.shared.lock().unwrap();

@@ -841,10 +841,11 @@ size_t llg_matcher_get_mask_byte_size(const struct LlgMatcher *matcher);
  *
  * Call this while `matcher` is idle. The returned handle can outlive the
  * matcher. Free it with [`llg_free_cancellation_handle()`]. Cancellation
+ * becomes enabled for the matcher before the handle is returned. Cancellation
  * handle operations may run while a worker mutates the matcher. Join the
  * worker before accessing or freeing the matcher.
  */
-struct LlgCancellationHandle *llg_matcher_get_cancellation_handle(const struct LlgMatcher *matcher);
+struct LlgCancellationHandle *llg_matcher_get_cancellation_handle(struct LlgMatcher *matcher);
 
 /**
  * Clone a cancellation handle.

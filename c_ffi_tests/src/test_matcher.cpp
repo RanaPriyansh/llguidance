@@ -132,6 +132,7 @@ BOOST_AUTO_TEST_CASE(compute_mask_into) {
 BOOST_AUTO_TEST_CASE(cancellation_handle_cancels_matcher) {
   MatcherContext ctx;
   auto matcher = ctx.make_matcher("regex", "[abc]+");
+  BOOST_CHECK(!llg_matcher_is_cancelled(matcher.get()));
   CancellationHandlePtr handle(
       llg_matcher_get_cancellation_handle(matcher.get()));
 

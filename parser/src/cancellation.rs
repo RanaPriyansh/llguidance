@@ -106,7 +106,8 @@ mod tests {
         };
         let factory = ParserFactory::new(&env, InferenceCapabilities::default(), slices).unwrap();
         let matcher =
-            Matcher::new(factory.create_parser(TopLevelGrammar::from_lark(grammar.to_string())));
+            Matcher::new(factory.create_parser(TopLevelGrammar::from_lark(grammar.to_string())))
+                .into_cancellable();
         assert!(!matcher.is_error(), "{:?}", matcher.get_error());
         matcher
     }
@@ -116,11 +117,28 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_is_opt_in() {
+        let env = ApproximateTokEnv::single_byte_env();
+        let factory = ParserFactory::new(&env, InferenceCapabilities::default(), &[]).unwrap();
+        let mut matcher = Matcher::new(
+            factory.create_parser(TopLevelGrammar::from_lark("start: /[a-z]+/".to_string())),
+        );
+        assert!(matcher.cancellation_handle().is_none());
+        assert!(!matcher.is_cancelled());
+        assert!(matcher.clone().cancellation_handle().is_none());
+        assert!(matcher.deep_clone().cancellation_handle().is_none());
+        matcher = matcher.into_cancellable();
+        assert!(matcher.cancellation_handle().is_some());
+        matcher.cancellation_handle().unwrap().cancel();
+        assert!(matcher.is_cancelled());
+    }
+
+    #[test]
     fn terminal_cancellation_and_clone_ownership() {
         let mut original = matcher("start: /[a-z]+/", &[], false);
         let mut shallow = original.clone();
         let mut deep = original.deep_clone();
-        let handle = original.cancellation_handle();
+        let handle = original.cancellation_handle().unwrap();
         let second_handle = handle.clone();
         drop(handle);
         second_handle.cancel();
@@ -147,8 +165,8 @@ mod tests {
         );
         drop(original);
         second_handle.cancel();
-        let mut error = Matcher::new(Err(anyhow::anyhow!("original error")));
-        error.cancellation_handle().cancel();
+        let mut error = Matcher::new(Err(anyhow::anyhow!("original error"))).into_cancellable();
+        error.cancellation_handle().unwrap().cancel();
         assert!(!error.is_cancelled());
         assert_eq!(
             error.compute_mask().unwrap_err().to_string(),
@@ -164,7 +182,7 @@ mod tests {
         cancel: bool,
         operation: fn(&mut Matcher) -> anyhow::Result<()>,
     ) -> (usize, Matcher) {
-        let handle = matcher.cancellation_handle();
+        let handle = matcher.cancellation_handle().unwrap();
         let mut sibling = matcher.clone();
         let mut control = matcher.deep_clone();
         let (reached_tx, reached_rx) = mpsc::sync_channel(0);
@@ -404,18 +422,18 @@ choices: {alternatives}
         cached.consume_token(b'a' as u32).unwrap();
         let expected = cached.compute_mask().unwrap();
         assert_eq!(cached.compute_mask().unwrap(), expected);
-        cached.cancellation_handle().cancel();
+        cached.cancellation_handle().unwrap().cancel();
         assert_cancelled(cached.compute_mask());
 
         let mut forced = matcher("start: \"abcdef\"", &[], true);
         assert!(!forced.compute_ff_tokens().unwrap().is_empty());
-        forced.cancellation_handle().cancel();
+        forced.cancellation_handle().unwrap().cancel();
         assert_cancelled(forced.compute_mask_or_eos());
 
         let mut stopped = matcher("start: \"a\"", &[], false);
         stopped.consume_token(b'a' as u32).unwrap();
         assert!(stopped.is_stopped());
-        stopped.cancellation_handle().cancel();
+        stopped.cancellation_handle().unwrap().cancel();
         assert_cancelled(stopped.compute_mask_or_eos());
     }
 

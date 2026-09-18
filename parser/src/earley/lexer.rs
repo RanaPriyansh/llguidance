@@ -209,7 +209,7 @@ impl Lexer {
         state: StateID,
         extra_idx: usize,
         budget: u64,
-        cancellation: &crate::CancellationHandle,
+        cancellation: Option<&crate::CancellationHandle>,
     ) -> Result<bool> {
         self.dfa.check_subsume(
             state,
