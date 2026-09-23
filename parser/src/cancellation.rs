@@ -127,6 +127,9 @@ mod tests {
         assert!(!matcher.is_cancelled());
         assert!(matcher.clone().cancellation_handle().is_none());
         assert!(matcher.deep_clone().cancellation_handle().is_none());
+        let disabled_mask = matcher.clone().compute_mask().unwrap();
+        let mut enabled = matcher.clone().into_cancellable();
+        assert_eq!(enabled.compute_mask().unwrap(), disabled_mask);
         matcher = matcher.into_cancellable();
         assert!(matcher.cancellation_handle().is_some());
         matcher.cancellation_handle().unwrap().cancel();
@@ -234,61 +237,31 @@ mod tests {
     }
 
     #[test]
-    fn rejected_byte_attempts_observe_cancellation() {
-        use toktrie::Recognizer;
-
-        let env = ApproximateTokEnv::single_byte_env();
-        let factory = ParserFactory::new(&env, InferenceCapabilities::default(), &[]).unwrap();
-        let mut parser = factory
-            .create_parser(TopLevelGrammar::from_lark("start: /[a-z]+/".to_string()))
-            .unwrap();
-        parser.start_without_prompt();
-        let handle = CancellationHandle::default();
-        parser.parser.set_cancellation_handle(handle.clone());
-        let (reached, _reached_receiver) = mpsc::sync_channel(0);
-        let (_resume_sender, resume) = mpsc::sync_channel(0);
-        PROGRESS.with_borrow_mut(|p| {
-            *p = Some(Progress {
-                point: "trie",
-                work: 0,
-                threshold: usize::MAX,
-                reached,
-                resume,
-            })
-        });
-        parser.parser.with_recognizer(|rec| {
-            rec.trie_started("rejected cancellation attempts");
-            assert!(!rec.try_push_byte(b'#'));
-            handle.cancel();
-            for _ in 0..512 {
-                assert!(!rec.try_push_byte(b'#'));
-            }
-            rec.trie_finished();
-        });
-        let work = PROGRESS.with_borrow_mut(|p| p.take().unwrap().work);
-        assert!(
-            (1..=16).contains(&work),
-            "performed {work} rejected attempts"
-        );
-    }
-
-    #[test]
-    fn cancellation_inside_trie_restores_shared_lexer() {
+    fn cancellation_inside_trie_is_bounded_and_restores_shared_lexer() {
         let mut original = matcher("start: /[a-z]+/", &[], false);
         original.consume_token(b'a' as u32).unwrap();
         let mut sibling = original.clone();
         let mut control = original.deep_clone();
         let (full_work, _) = interrupt(original.deep_clone(), "trie", 128, false, mask);
-        let (cancelled_work, cancelled) = interrupt(original, "trie", 128, true, mask);
+        assert!(full_work > 512 + 1024, "fixture work was only {full_work}");
+        let (cancelled_work, cancelled) = interrupt(original, "trie", 512, true, mask);
         assert!(
-            cancelled_work < full_work / 2,
-            "{cancelled_work} / {full_work}"
+            cancelled_work <= 512 + 1024,
+            "performed {cancelled_work} byte visits after a request at visit 512"
         );
         drop(cancelled);
         assert_eq!(
             sibling.compute_mask().unwrap(),
             control.compute_mask().unwrap()
         );
+    }
+
+    #[test]
+    fn cancellation_inside_short_trie_returns_typed_error() {
+        let original = matcher("start: /[a-z]+/", &[], true);
+        let (visits, cancelled) = interrupt(original, "trie", 1, true, mask);
+        assert!((1..1024).contains(&visits));
+        assert!(cancelled.is_cancelled());
     }
 
     #[test]

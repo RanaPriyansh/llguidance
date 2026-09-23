@@ -1618,12 +1618,9 @@ impl ParserState {
 
         let res = if let Some(b) = byte {
             self.stats.definitive_bytes += 1;
-            self.shared_box.lexer_mut().advance(
-                curr.lexer_state,
-                b,
-                true,
-                self.cancellation.as_ref(),
-            )
+            self.shared_box
+                .lexer_mut()
+                .advance(curr.lexer_state, b, true, &self.cancellation)
         } else {
             let lexeme = self.lexer_mut().force_lexeme_end(curr.lexer_state);
             if lexeme.is_error() {
@@ -2426,7 +2423,7 @@ impl ParserState {
             lexer_state: self.shared_box.lexer_mut().transition_start_state(
                 added_row_start_state,
                 transition_byte,
-                self.cancellation.as_ref(),
+                &self.cancellation,
             ),
             byte: transition_byte,
         };
@@ -2497,7 +2494,7 @@ impl ParserState {
                     lexer_state,
                     b,
                     trace_here,
-                    self.cancellation.as_ref(),
+                    &self.cancellation,
                 );
                 #[cfg(test)]
                 crate::cancellation::checkpoint("hidden");
@@ -2723,20 +2720,13 @@ impl ParserState {
     }
 }
 
-// Poll at most 16 byte attempts apart, including rejected bytes.
-const TRIE_CANCELLATION_POLL_INTERVAL: u16 = 16;
-
 pub struct ParserRecognizer<'a> {
     state: &'a mut ParserState,
-    cancellation_poll_remaining: u16,
 }
 
 impl<'a> ParserRecognizer<'a> {
     fn new(state: &'a mut ParserState) -> Self {
-        Self {
-            state,
-            cancellation_poll_remaining: 0,
-        }
+        Self { state }
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -2785,6 +2775,14 @@ pub trait BiasComputer: Send + Sync {
 // and
 // https://github.com/microsoft/llguidance/blob/main/docs/toktrie.md .
 impl Recognizer for ParserRecognizer<'_> {
+    fn cancellation_enabled(&self) -> bool {
+        self.state.cancellation.is_some()
+    }
+
+    fn cancellation_requested(&self) -> bool {
+        self.state.is_cancelled()
+    }
+
     #[inline(always)]
     fn pop_bytes(&mut self, num: usize) {
         if ITEM_TRACE {
@@ -2802,7 +2800,6 @@ impl Recognizer for ParserRecognizer<'_> {
     }
 
     fn trie_started(&mut self, lbl: &str) {
-        self.cancellation_poll_remaining = 0;
         self.state.trie_started_inner(lbl);
     }
 
@@ -2817,15 +2814,6 @@ impl Recognizer for ParserRecognizer<'_> {
     // and the various compute_bias() methods.
     #[inline(always)]
     fn try_push_byte(&mut self, byte: u8) -> bool {
-        if self.cancellation_poll_remaining == 0 {
-            if self.state.is_cancelled() {
-                // Keep polling after cancellation, before any further parser work.
-                return false;
-            }
-            self.cancellation_poll_remaining = TRIE_CANCELLATION_POLL_INTERVAL;
-        }
-        // Count every attempt, including bytes that the grammar rejects.
-        self.cancellation_poll_remaining -= 1;
         let stats = false;
 
         let lexer_logging = false;
@@ -2834,7 +2822,7 @@ impl Recognizer for ParserRecognizer<'_> {
             curr.lexer_state,
             byte,
             lexer_logging,
-            self.state.cancellation.as_ref(),
+            &self.state.cancellation,
         );
 
         if ITEM_TRACE {

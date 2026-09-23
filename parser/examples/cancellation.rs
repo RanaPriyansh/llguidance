@@ -67,6 +67,14 @@ struct MeasuredRecognizer<'a, 'b> {
 }
 
 impl Recognizer for MeasuredRecognizer<'_, '_> {
+    fn cancellation_enabled(&self) -> bool {
+        self.inner.cancellation_enabled()
+    }
+
+    fn cancellation_requested(&self) -> bool {
+        self.inner.cancellation_requested()
+    }
+
     fn pop_bytes(&mut self, count: usize) {
         self.inner.pop_bytes(count);
     }

@@ -72,7 +72,7 @@ impl Recognizer for LexerPrecomputer<'_> {
     }
     fn try_push_byte(&mut self, byte: u8) -> bool {
         let state = *self.states.last().unwrap();
-        match self.lex.advance(state, byte, false, None) {
+        match self.lex.advance(state, byte, false, &None) {
             LexerResult::State(next_state, _) => {
                 self.states.push(next_state);
                 true
@@ -93,7 +93,7 @@ impl Lexer {
         let s0 = dfa.initial_state(&spec.all_lexemes());
         let mut allowed_first_byte = SimpleVob::alloc(256);
         for i in 0..=255 {
-            if !dfa.transition(s0, i, None).is_dead() {
+            if !dfa.transition(s0, i, &None).is_dead() {
                 allowed_first_byte.allow_token(i as u32);
             }
         }
@@ -128,7 +128,7 @@ impl Lexer {
         &mut self,
         s: StateID,
         first_byte: Option<u8>,
-        cancellation: Option<&crate::CancellationHandle>,
+        cancellation: &Option<crate::CancellationHandle>,
     ) -> StateID {
         first_byte.map_or(s, |b| {
             #[cfg(all(test, feature = "lark"))]
@@ -242,7 +242,7 @@ impl Lexer {
         prev: StateID,
         byte: u8,
         enable_logging: bool,
-        cancellation: Option<&crate::CancellationHandle>,
+        cancellation: &Option<crate::CancellationHandle>,
     ) -> LexerResult {
         let state = self.dfa.transition(prev, byte, cancellation);
 

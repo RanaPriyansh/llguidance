@@ -308,7 +308,7 @@ impl RegexVec {
         &mut self,
         state: StateID,
         b: u8,
-        cancellation: Option<&crate::CancellationHandle>,
+        cancellation: &Option<crate::CancellationHandle>,
     ) -> StateID {
         let idx = self.alpha.map_state(state, b);
         let new_state = self.state_table[idx];
@@ -741,7 +741,7 @@ impl RegexVec {
         state: StateID,
         b: u8,
         idx: usize,
-        cancellation: Option<&crate::CancellationHandle>,
+        cancellation: &Option<crate::CancellationHandle>,
     ) -> StateID {
         assert!(state.is_valid());
 
@@ -753,11 +753,11 @@ impl RegexVec {
         // let mut state_size = 0;
 
         for (idx, e) in iter_state(&self.rx_sets, state) {
-            if cancellation.is_some_and(|c| c.is_cancelled()) {
+            if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                 return StateID::DEAD;
             }
             let d = self.deriv.derivative(&mut self.exprs, e, b);
-            if cancellation.is_some_and(|c| c.is_cancelled()) {
+            if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                 return StateID::DEAD;
             }
 
@@ -765,7 +765,7 @@ impl RegexVec {
             let non_empty = self
                 .relevance
                 .is_non_empty_limited(&mut self.exprs, d, fuel);
-            if cancellation.is_some_and(|c| c.is_cancelled()) {
+            if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
                 return StateID::DEAD;
             }
             let d = match non_empty {
@@ -786,7 +786,7 @@ impl RegexVec {
         }
 
         // Do not publish an incomplete transition or change shared error state.
-        if cancellation.is_some_and(|c| c.is_cancelled()) {
+        if cancellation.as_ref().is_some_and(|c| c.is_cancelled()) {
             return StateID::DEAD;
         }
 
