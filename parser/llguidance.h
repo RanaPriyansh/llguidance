@@ -952,11 +952,11 @@ LLGUIDANCE_NODISCARD int32_t llg_matcher_reset(struct LlgMatcher *matcher);
 bool llg_matcher_is_accepting(struct LlgMatcher *matcher);
 
 /**
- * Check whether the matcher will force an EOS token.
+ * Check whether the matcher has reached a terminal state.
  *
- * Also returns true in an error or cancelled state. Cancellation does not
- * permit EOS. Check [`llg_matcher_is_cancelled()`] and
- * [`llg_matcher_is_error()`] before treating true as an EOS result.
+ * Returns true after normal completion, an error, or cancellation.
+ * Use [`llg_matcher_is_error()`] and [`llg_matcher_is_cancelled()`] to
+ * distinguish unsuccessful termination.
  */
 bool llg_matcher_is_stopped(const struct LlgMatcher *matcher);
 

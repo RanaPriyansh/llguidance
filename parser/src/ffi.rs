@@ -1932,11 +1932,11 @@ pub extern "C" fn llg_matcher_is_accepting(matcher: &mut LlgMatcher) -> bool {
     matcher.matcher.is_accepting().unwrap_or(false)
 }
 
-/// Check whether the matcher will force an EOS token.
+/// Check whether the matcher has reached a terminal state.
 ///
-/// Also returns true in an error or cancelled state. Cancellation does not
-/// permit EOS. Check [`llg_matcher_is_cancelled()`] and
-/// [`llg_matcher_is_error()`] before treating true as an EOS result.
+/// Returns true after normal completion, an error, or cancellation.
+/// Use [`llg_matcher_is_error()`] and [`llg_matcher_is_cancelled()`] to
+/// distinguish unsuccessful termination.
 #[no_mangle]
 pub extern "C" fn llg_matcher_is_stopped(matcher: &LlgMatcher) -> bool {
     matcher.matcher.is_stopped()
