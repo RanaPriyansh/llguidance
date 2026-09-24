@@ -46,7 +46,8 @@ Join the worker before using or dropping its matcher.
 
 The matcher checks the request during parser, lexer, trie, and slice work.
 Fallible operations return the typed `Cancelled` error.
-When cancellation is observed, fast-forward list operations return an empty list and set `StopReason::Cancelled`.
+When cancellation is observed, `compute_ff_tokens()`, `consume_ff_tokens()`,
+and `compute_ff_bytes()` return an empty result and set `StopReason::Cancelled`.
 Use `is_error`, `is_cancelled`, `get_error`, or `stop_reason` to inspect the matcher state.
 Cancellation cannot return a successful partial mask or force EOS.
 Reset and rollback cannot resume a cancelled matcher.
@@ -68,21 +69,3 @@ Use it with `llg_cancel()` and
 Do not free a handle allocation while another thread uses that allocation.
 Only cancellation handle operations may run concurrently with matcher mutation.
 After cancellation, mask computation returns `-1` and `llg_matcher_get_mask()` returns null.
-
-The [cancellation example](examples/cancellation.rs) compares mask work after a fixed progress checkpoint:
-
-```sh
-cargo run -p llguidance --release --example cancellation -- baseline 30
-cargo run -p llguidance --release --example cancellation -- cancel 30
-```
-
-The `compute_mask` benchmark reads `LLGUIDANCE_BENCH_CANCELLATION` during setup.
-Unset the variable or set it to `disabled` for the default path.
-Set it to `enabled` to opt in before measured steady-state operations.
-The `first_mask` case includes matcher construction and opt-in allocation in its measured cold-start path.
-Other selected cases activate cancellation before their measured operations.
-
-```sh
-LLGUIDANCE_BENCH_CANCELLATION=disabled cargo bench -p llguidance --bench compute_mask
-LLGUIDANCE_BENCH_CANCELLATION=enabled cargo bench -p llguidance --bench compute_mask
-```

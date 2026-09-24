@@ -1,5 +1,5 @@
 use std::hint::black_box;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use llguidance::{
@@ -10,12 +10,6 @@ use llguidance::{
 
 const DEFAULT_VOCAB_SIZE: usize = 32_768;
 const CANCELLATION_ENV: &str = "LLGUIDANCE_BENCH_CANCELLATION";
-const SLICER_ENV: &str = "LLGUIDANCE_BENCH_SLICER";
-const CANONICAL_ENV: &str = "LLGUIDANCE_BENCH_CANONICAL";
-const PREFLIGHT_ENV: &str = "LLGUIDANCE_BENCH_PREFLIGHT";
-const TOKENIZER_ENV: &str = "LLGUIDANCE_BENCH_TOKENIZER";
-const CANONICAL_TOKENIZER: &str =
-    "microsoft/Phi-3.5-mini-instruct@2fe192450127e6a83f7441aef6e3ca586c338b77";
 
 const BLOG_SCHEMA_JSON: &str = include_str!("../../sample_parser/data/blog.schema.json");
 
@@ -109,52 +103,13 @@ fn benchmark_cancellation_enabled() -> bool {
     }
 }
 
-fn benchmark_slicer_enabled() -> bool {
-    match std::env::var(SLICER_ENV).as_deref() {
-        Ok("enabled") => true,
-        Ok("disabled") => false,
-        Err(_) => true,
-        Ok(value) => panic!("{SLICER_ENV} must be enabled or disabled, got {value:?}"),
-    }
-}
-
-fn assert_slicer_equivalence(tok_env: &TokEnv, vocab_size: usize) {
-    let mut enabled = create_matcher(tok_env, blog_grammar(), PREFIX_IN_STRING, false, true);
-    let mut disabled = create_matcher(tok_env, blog_grammar(), PREFIX_IN_STRING, false, false);
-    let enabled_mask = enabled.compute_mask().unwrap();
-    let disabled_mask = disabled.compute_mask().unwrap();
-    for token in 0..vocab_size as TokenId {
-        assert_eq!(
-            enabled_mask.is_allowed(token),
-            disabled_mask.is_allowed(token),
-            "slicer changed mask at token {token}"
-        );
-    }
-}
-
-fn emit_mask_preflight(name: &str, mask: &dyn Fn(TokenId) -> bool, vocab_size: usize) {
-    if std::env::var(PREFLIGHT_ENV).as_deref() != Ok("1") {
-        return;
-    }
-    static EMITTED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
-    let emitted = EMITTED.get_or_init(Default::default);
-    if !emitted.lock().unwrap().insert(name.to_string()) {
-        return;
-    }
-    let bits: String = (0..vocab_size as TokenId)
-        .map(|token| if mask(token) { '1' } else { '0' })
-        .collect();
-    eprintln!("mask_preflight name={name} bits={bits}");
-}
-
 fn create_matcher(
     tok_env: &TokEnv,
     grammar: TopLevelGrammar,
     prefix: &[u8],
     cancellation_enabled: bool,
-    slicer_enabled: bool,
 ) -> Matcher {
-    let mut factory = create_factory(tok_env, slicer_enabled);
+    let mut factory = ParserFactory::new_simple(tok_env).unwrap();
     factory.quiet();
     let mut matcher = Matcher::new(factory.create_parser(grammar));
     if cancellation_enabled {
@@ -169,39 +124,11 @@ fn create_matcher(
     matcher
 }
 
-fn create_factory(tok_env: &TokEnv, slicer_enabled: bool) -> ParserFactory {
-    let mut factory = ParserFactory::new_simple(tok_env).unwrap();
-    if !slicer_enabled {
-        factory = factory.with_slices(&[]).unwrap();
-    }
-    factory
-}
-
 /// Benchmark compute_mask at different vocabulary sizes.
 /// Uses vocab size as throughput metric since larger vocabs require more work.
 fn bench_compute_mask(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_mask");
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
-    if std::env::var(PREFLIGHT_ENV).as_deref() == Ok("1") {
-        for vocab_size in [8_192, 32_768, 128_000] {
-            let tok_env = synthetic_tok_env(vocab_size);
-            assert_slicer_equivalence(&tok_env, vocab_size);
-            let mut matcher = create_matcher(
-                &tok_env,
-                blog_grammar(),
-                PREFIX_IN_STRING,
-                cancellation_enabled,
-                slicer_enabled,
-            );
-            let mask = matcher.compute_mask().unwrap();
-            emit_mask_preflight(
-                &format!("synthetic{vocab_size}_in_string"),
-                &|token| mask.is_allowed(token),
-                vocab_size,
-            );
-        }
-    }
 
     // Realistic LLM vocabulary sizes (8k to 128k)
     for vocab_size in [8_192, 32_768, 65_536, 128_000] {
@@ -216,7 +143,6 @@ fn bench_compute_mask(c: &mut Criterion) {
                     blog_grammar(),
                     PREFIX_IN_STRING,
                     cancellation_enabled,
-                    slicer_enabled,
                 );
                 b.iter(|| {
                     matcher.invalidate_bias_cache();
@@ -234,7 +160,6 @@ fn bench_compute_mask_positions(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_mask_positions");
     let vocab_size = DEFAULT_VOCAB_SIZE;
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
 
     let positions = [
         ("start", PREFIX_START),
@@ -248,13 +173,8 @@ fn bench_compute_mask_positions(c: &mut Criterion) {
     for (name, prefix) in positions {
         group.bench_with_input(BenchmarkId::from_parameter(name), &prefix, |b, &prefix| {
             let tok_env = synthetic_tok_env(vocab_size);
-            let mut matcher = create_matcher(
-                &tok_env,
-                blog_grammar(),
-                prefix,
-                cancellation_enabled,
-                slicer_enabled,
-            );
+            let mut matcher =
+                create_matcher(&tok_env, blog_grammar(), prefix, cancellation_enabled);
             b.iter(|| {
                 matcher.invalidate_bias_cache();
                 black_box(matcher.compute_mask().unwrap())
@@ -272,7 +192,6 @@ fn bench_token_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("token_generation");
     let num_tokens = 20;
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
 
     for vocab_size in [32_768, 65_536, 128_000] {
         group.throughput(Throughput::Elements(num_tokens));
@@ -289,7 +208,6 @@ fn bench_token_generation(c: &mut Criterion) {
                             blog_grammar(),
                             PREFIX_IN_STRING,
                             cancellation_enabled,
-                            slicer_enabled,
                         )
                     },
                     |mut m| {
@@ -316,7 +234,6 @@ fn bench_token_generation(c: &mut Criterion) {
 fn bench_first_mask(c: &mut Criterion) {
     let mut group = c.benchmark_group("first_mask");
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
 
     for vocab_size in [32_768, 65_536, 128_000] {
         group.throughput(Throughput::Elements(1));
@@ -328,7 +245,7 @@ fn bench_first_mask(c: &mut Criterion) {
                 let grammar = blog_grammar();
 
                 b.iter(|| {
-                    let mut factory = create_factory(&tok_env, slicer_enabled);
+                    let mut factory = ParserFactory::new_simple(&tok_env).unwrap();
                     factory.quiet();
                     let mut matcher = Matcher::new(factory.create_parser(grammar.clone()));
                     if cancellation_enabled {
@@ -360,7 +277,6 @@ fn bench_lazy_lexeme(c: &mut Criterion) {
     let mut group = c.benchmark_group("lazy_lexeme");
     let vocab_size = DEFAULT_VOCAB_SIZE;
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
 
     // 50 'x' characters as input
     const INPUT: &[u8] = b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
@@ -386,7 +302,6 @@ fn bench_lazy_lexeme(c: &mut Criterion) {
                             TopLevelGrammar::from_lark(grammar.to_string()),
                             b"",
                             cancellation_enabled,
-                            slicer_enabled,
                         )
                     },
                     |mut m| {
@@ -408,7 +323,6 @@ fn bench_lazy_lexeme_complex(c: &mut Criterion) {
     let mut group = c.benchmark_group("lazy_lexeme_complex");
     let vocab_size = DEFAULT_VOCAB_SIZE;
     let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
 
     // Each test case: (name, grammar, input_bytes)
     let test_cases: [(&str, &str, &[u8]); 4] = [
@@ -445,7 +359,6 @@ fn bench_lazy_lexeme_complex(c: &mut Criterion) {
                         TopLevelGrammar::from_lark(grammar.to_string()),
                         b"",
                         cancellation_enabled,
-                        slicer_enabled,
                     )
                 },
                 |mut m| {
@@ -459,88 +372,6 @@ fn bench_lazy_lexeme_complex(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_canonical_tokenizer(c: &mut Criterion) {
-    if std::env::var(CANONICAL_ENV).as_deref() != Ok("1") {
-        return;
-    }
-
-    let cancellation_enabled = benchmark_cancellation_enabled();
-    let slicer_enabled = benchmark_slicer_enabled();
-    let tokenizer_name =
-        std::env::var(TOKENIZER_ENV).unwrap_or_else(|_| CANONICAL_TOKENIZER.to_string());
-    let tok_env = toktrie_hf_downloader::tok_env_from_name(&tokenizer_name).unwrap();
-    let prefix_tokens = tok_env.tokenize_bytes(PREFIX_IN_STRING);
-    assert_eq!(
-        tok_env.tok_trie().decode_raw(&prefix_tokens),
-        PREFIX_IN_STRING,
-        "canonical tokenizer did not reconstruct the intended prefix"
-    );
-    let mut group = c.benchmark_group("canonical_compute_mask");
-    group.bench_function("phi_3_5_in_string", |b| {
-        let mut matcher = {
-            let mut factory = create_factory(&tok_env, slicer_enabled);
-            factory.quiet();
-            let mut matcher = Matcher::new(factory.create_parser(blog_grammar()));
-            if cancellation_enabled {
-                matcher = matcher.into_cancellable();
-            }
-            for &token in &prefix_tokens {
-                let mask = matcher.compute_mask().unwrap();
-                assert!(mask.is_allowed(token), "canonical prefix token is disallowed");
-                matcher.consume_token(token).unwrap();
-            }
-            matcher
-        };
-        let mut other_factory = create_factory(&tok_env, !slicer_enabled);
-        other_factory.quiet();
-        let mut other = Matcher::new(other_factory.create_parser(blog_grammar()));
-        if cancellation_enabled {
-            other = other.into_cancellable();
-        }
-        for &token in &prefix_tokens {
-            other.compute_mask().unwrap();
-            other.consume_token(token).unwrap();
-        }
-        let candidate_mask = matcher.compute_mask().unwrap();
-        let applied = matcher.last_step_stats().unwrap().slices_applied;
-        emit_mask_preflight(
-            "canonical_phi35_in_string",
-            &|token| candidate_mask.is_allowed(token),
-            tok_env.tok_trie().vocab_size() as usize,
-        );
-        let other_mask = other.compute_mask().unwrap();
-        for token in 0..tok_env.tok_trie().vocab_size() as TokenId {
-            assert_eq!(
-                candidate_mask.is_allowed(token),
-                other_mask.is_allowed(token),
-                "slicer changed canonical mask at token {token}"
-            );
-        }
-        if slicer_enabled {
-            assert!(applied > 0, "canonical in-string path did not apply slices");
-        } else {
-            assert_eq!(applied, 0, "slicer-disabled path applied slices");
-        }
-        static REPORTED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
-        let key = format!("{tokenizer_name}:{slicer_enabled}");
-        if REPORTED
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap()
-            .insert(key)
-        {
-            eprintln!(
-                "canonical tokenizer={tokenizer_name} slicer_enabled={slicer_enabled} slices_applied={applied}"
-            );
-        }
-        b.iter(|| {
-            matcher.invalidate_bias_cache();
-            black_box(matcher.compute_mask().unwrap())
-        })
-    });
-    group.finish();
-}
-
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -548,6 +379,6 @@ criterion_group! {
         .warm_up_time(std::time::Duration::from_secs(2))
         .measurement_time(std::time::Duration::from_secs(5))
         .noise_threshold(0.05);
-    targets = bench_compute_mask, bench_compute_mask_positions, bench_token_generation, bench_first_mask, bench_lazy_lexeme, bench_lazy_lexeme_complex, bench_canonical_tokenizer
+    targets = bench_compute_mask, bench_compute_mask_positions, bench_token_generation, bench_first_mask, bench_lazy_lexeme, bench_lazy_lexeme_complex
 }
 criterion_main!(benches);
