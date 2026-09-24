@@ -229,24 +229,27 @@ impl Matcher {
         }
     }
 
-    /// Return forced tokens, or an empty list for non-canonical tokenizers.
-    /// Return an error if the matcher has failed or cancellation is requested.
-    pub fn compute_ff_tokens(&mut self) -> Result<Vec<TokenId>> {
+    /// Return forced tokens, or an empty list for non-canonical tokenizers or failed operations.
+    /// Use `is_error`, `is_cancelled`, `get_error`, or `stop_reason` to inspect failures.
+    pub fn compute_ff_tokens(&mut self) -> Vec<TokenId> {
         self.with_inner(|inner| Ok(inner.parser.compute_ff_tokens()))
+            .unwrap_or_default()
     }
 
-    pub fn consume_ff_tokens(&mut self) -> Result<Vec<TokenId>> {
-        let toks = self.compute_ff_tokens()?;
-        if !toks.is_empty() {
-            self.consume_tokens(&toks)?;
+    pub fn consume_ff_tokens(&mut self) -> Vec<TokenId> {
+        let toks = self.compute_ff_tokens();
+        if !toks.is_empty() && self.consume_tokens(&toks).is_err() {
+            return Vec::new();
         }
-        Ok(toks)
+        toks
     }
 
-    /// Return any bytes that are forced by the current parser state.
+    /// Return bytes forced by the current parser state, or an empty list if the operation fails.
     /// This also works for non-canonical tokenizers.
-    pub fn compute_ff_bytes(&mut self) -> Result<Vec<u8>> {
+    /// Use `is_error`, `is_cancelled`, `get_error`, or `stop_reason` to inspect failures.
+    pub fn compute_ff_bytes(&mut self) -> Vec<u8> {
         self.with_inner(|inner| Ok(inner.parser.force_bytes()))
+            .unwrap_or_default()
     }
 
     /// Tries to advance the parser by consuming the given tokens.

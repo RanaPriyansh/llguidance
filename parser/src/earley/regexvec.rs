@@ -304,7 +304,12 @@ impl RegexVec {
     /// for this regex vector, return the to-state.  It is taken
     /// from the cache, if it is cached, and created otherwise.
     #[inline(always)]
-    pub fn transition(
+    pub fn transition(&mut self, state: StateID, b: u8) -> StateID {
+        self.transition_with_cancellation(state, b, &None)
+    }
+
+    #[inline(always)]
+    pub(crate) fn transition_with_cancellation(
         &mut self,
         state: StateID,
         b: u8,
@@ -337,6 +342,15 @@ impl RegexVec {
     /// Part of the interface for "subsumption", a feature implementing
     /// regex containment.
     pub fn check_subsume(
+        &mut self,
+        state: StateID,
+        lexeme_idx: LexemeIdx,
+        budget: u64,
+    ) -> Result<bool> {
+        self.check_subsume_with_cancellation(state, lexeme_idx, budget, None)
+    }
+
+    pub(crate) fn check_subsume_with_cancellation(
         &mut self,
         state: StateID,
         lexeme_idx: LexemeIdx,

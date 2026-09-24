@@ -45,7 +45,9 @@ The call sets a permanent request and does not wait for the worker.
 Join the worker before using or dropping its matcher.
 
 The matcher checks the request during parser, lexer, trie, and slice work.
-An observed request returns the typed `Cancelled` error and sets `StopReason::Cancelled`.
+Fallible operations return the typed `Cancelled` error.
+When cancellation is observed, fast-forward list operations return an empty list and set `StopReason::Cancelled`.
+Use `is_error`, `is_cancelled`, `get_error`, or `stop_reason` to inspect the matcher state.
 Cancellation cannot return a successful partial mask or force EOS.
 Reset and rollback cannot resume a cancelled matcher.
 A non-cancellation error already stored in the matcher keeps its original cause.

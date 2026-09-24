@@ -111,7 +111,7 @@ impl StopController {
                 let mut dfa = rx.dfa.lock().unwrap();
                 for &b in bytes {
                     buf.push(b);
-                    let state2 = dfa.transition(state, b, &None);
+                    let state2 = dfa.transition(state, b);
                     // println!("state: {:?} -{:?}-> {:?}", state, b as char, state2);
                     state = state2;
                     assert!(!state.is_dead());

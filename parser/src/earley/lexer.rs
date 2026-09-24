@@ -93,7 +93,7 @@ impl Lexer {
         let s0 = dfa.initial_state(&spec.all_lexemes());
         let mut allowed_first_byte = SimpleVob::alloc(256);
         for i in 0..=255 {
-            if !dfa.transition(s0, i, &None).is_dead() {
+            if !dfa.transition(s0, i).is_dead() {
                 allowed_first_byte.allow_token(i as u32);
             }
         }
@@ -133,7 +133,7 @@ impl Lexer {
         first_byte.map_or(s, |b| {
             #[cfg(all(test, feature = "lark"))]
             crate::cancellation::IN_START_TRANSITION.with(|flag| flag.set(true));
-            let state = self.dfa.transition(s, b, cancellation);
+            let state = self.dfa.transition_with_cancellation(s, b, cancellation);
             #[cfg(all(test, feature = "lark"))]
             crate::cancellation::IN_START_TRANSITION.with(|flag| flag.set(false));
             state
@@ -211,7 +211,7 @@ impl Lexer {
         budget: u64,
         cancellation: Option<&crate::CancellationHandle>,
     ) -> Result<bool> {
-        self.dfa.check_subsume(
+        self.dfa.check_subsume_with_cancellation(
             state,
             self.spec.extra_lexeme(extra_idx),
             budget,
@@ -244,7 +244,9 @@ impl Lexer {
         enable_logging: bool,
         cancellation: &Option<crate::CancellationHandle>,
     ) -> LexerResult {
-        let state = self.dfa.transition(prev, byte, cancellation);
+        let state = self
+            .dfa
+            .transition_with_cancellation(prev, byte, cancellation);
 
         if enable_logging {
             let info = self.state_info(state);

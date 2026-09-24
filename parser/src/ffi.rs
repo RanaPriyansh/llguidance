@@ -1982,7 +1982,10 @@ pub unsafe extern "C" fn llg_matcher_compute_ff_tokens(
         return -1;
     }
     matcher.wrap(|m| {
-        let v = m.compute_ff_tokens()?;
+        let v = m.compute_ff_tokens();
+        if let Some(error) = m.get_error() {
+            bail!(error);
+        }
         let v = v.as_slice();
         let len = std::cmp::min(v.len(), output_len);
         unsafe {

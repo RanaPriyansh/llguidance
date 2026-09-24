@@ -112,6 +112,39 @@ mod tests {
         matcher
     }
 
+    #[test]
+    fn forced_results_keep_failure_in_matcher_state() {
+        let mut tested = matcher(r#"start: "abcdef""#, &[], true);
+        let expected = b"abcdef".iter().map(|b| *b as u32).collect::<Vec<_>>();
+        assert_eq!(tested.compute_ff_tokens(), expected);
+        assert_eq!(tested.compute_ff_bytes(), b"abcdef");
+        assert_eq!(tested.consume_ff_tokens(), expected);
+        assert!(!tested.is_error());
+        assert!(!tested.is_cancelled());
+        assert!(tested.get_error().is_none());
+        assert_eq!(tested.stop_reason(), StopReason::NoExtension);
+
+        let mut cancelled = matcher(r#"start: "abcdef""#, &[], true).into_cancellable();
+        cancelled.cancellation_handle().unwrap().cancel();
+        assert!(cancelled.compute_ff_tokens().is_empty());
+        assert!(cancelled.compute_ff_bytes().is_empty());
+        assert!(cancelled.consume_ff_tokens().is_empty());
+        assert!(cancelled.is_error());
+        assert!(cancelled.is_cancelled());
+        assert_eq!(
+            cancelled.get_error().as_deref(),
+            Some("operation cancelled")
+        );
+        assert_eq!(cancelled.stop_reason(), StopReason::Cancelled);
+
+        let mut healthy_empty = matcher("start: /[a-z]+/", &[], true);
+        assert!(healthy_empty.compute_ff_tokens().is_empty());
+        assert!(!healthy_empty.is_error());
+        assert!(!healthy_empty.is_cancelled());
+        assert!(healthy_empty.get_error().is_none());
+        assert_eq!(healthy_empty.stop_reason(), StopReason::NotStopped);
+    }
+
     fn assert_cancelled<T: std::fmt::Debug>(r: anyhow::Result<T>) {
         assert!(r.unwrap_err().is::<Cancelled>());
     }
@@ -152,9 +185,13 @@ mod tests {
         assert_cancelled(original.deep_clone().compute_mask());
         assert_cancelled(original.compute_mask_or_eos());
         assert_cancelled(original.consume_token(b'a' as u32));
-        assert_cancelled(original.compute_ff_tokens());
-        assert_cancelled(original.compute_ff_bytes());
-        assert_cancelled(original.consume_ff_tokens());
+        assert!(original.compute_ff_tokens().is_empty());
+        assert!(original.compute_ff_bytes().is_empty());
+        assert!(original.consume_ff_tokens().is_empty());
+        assert!(original.is_error());
+        assert!(original.is_cancelled());
+        assert_eq!(original.get_error().as_deref(), Some("operation cancelled"));
+        assert_eq!(original.stop_reason(), StopReason::Cancelled);
         assert_cancelled(original.is_accepting());
         assert_cancelled(original.reset());
         assert_cancelled(original.rollback(0));
@@ -171,6 +208,12 @@ mod tests {
         let mut error = Matcher::new(Err(anyhow::anyhow!("original error"))).into_cancellable();
         error.cancellation_handle().unwrap().cancel();
         assert!(!error.is_cancelled());
+        assert!(error.compute_ff_tokens().is_empty());
+        assert!(error.compute_ff_bytes().is_empty());
+        assert!(error.consume_ff_tokens().is_empty());
+        assert!(error.is_error());
+        assert_eq!(error.get_error().as_deref(), Some("original error"));
+        assert_eq!(error.stop_reason(), StopReason::InternalError);
         assert_eq!(
             error.compute_mask().unwrap_err().to_string(),
             "original error"
@@ -230,7 +273,20 @@ mod tests {
         matcher.compute_mask().map(|_| ())
     }
     fn forced(matcher: &mut Matcher) -> anyhow::Result<()> {
-        matcher.compute_ff_bytes().map(|_| ())
+        let result = matcher.compute_ff_bytes();
+        if matcher.is_cancelled() {
+            assert!(result.is_empty());
+            return Err(Cancelled.into());
+        }
+        Ok(())
+    }
+    fn consume_forced(matcher: &mut Matcher) -> anyhow::Result<()> {
+        let result = matcher.consume_ff_tokens();
+        if matcher.is_cancelled() {
+            assert!(result.is_empty());
+            return Err(Cancelled.into());
+        }
+        Ok(())
     }
     fn consume(matcher: &mut Matcher) -> anyhow::Result<()> {
         matcher.consume_token(b'x' as u32)
@@ -269,8 +325,29 @@ mod tests {
         let grammar = format!("start: {:?}", "a".repeat(1024));
         let original = matcher(&grammar, &[], true);
         let (full_work, _) = interrupt(original.deep_clone(), "forced", 16, false, forced);
-        let (cancelled_work, _) = interrupt(original, "forced", 16, true, forced);
+        let (cancelled_work, cancelled) = interrupt(original, "forced", 16, true, forced);
         assert!(cancelled_work < full_work / 2);
+        assert!(cancelled.is_error());
+        assert!(cancelled.is_cancelled());
+        assert_eq!(
+            cancelled.get_error().as_deref(),
+            Some("operation cancelled")
+        );
+        assert_eq!(cancelled.stop_reason(), StopReason::Cancelled);
+    }
+
+    #[test]
+    fn cancellation_during_forced_token_consumption_discards_tokens() {
+        let original = matcher(r#"start: "abcdef" /[a-z]+/"#, &[], true);
+        let (work, cancelled) = interrupt(original, "publication", 2, true, consume_forced);
+        assert_eq!(work, 2);
+        assert!(cancelled.is_error());
+        assert!(cancelled.is_cancelled());
+        assert_eq!(
+            cancelled.get_error().as_deref(),
+            Some("operation cancelled")
+        );
+        assert_eq!(cancelled.stop_reason(), StopReason::Cancelled);
     }
 
     #[test]
@@ -390,6 +467,20 @@ choices: {alternatives}
     }
 
     #[test]
+    fn cancellation_at_forced_result_publication_returns_empty() {
+        let original = matcher(r#"start: "abcdef""#, &[], true);
+        interrupt(original.deep_clone(), "publication", 1, false, forced);
+        let (_, cancelled) = interrupt(original, "publication", 1, true, forced);
+        assert!(cancelled.is_error());
+        assert!(cancelled.is_cancelled());
+        assert_eq!(
+            cancelled.get_error().as_deref(),
+            Some("operation cancelled")
+        );
+        assert_eq!(cancelled.stop_reason(), StopReason::Cancelled);
+    }
+
+    #[test]
     fn cancellation_defeats_cached_and_forced_masks() {
         let mut cached = matcher("start: /[a-z]+/", &[], false);
         cached.consume_token(b'a' as u32).unwrap();
@@ -399,7 +490,7 @@ choices: {alternatives}
         assert_cancelled(cached.compute_mask());
 
         let mut forced = matcher("start: \"abcdef\"", &[], true);
-        assert!(!forced.compute_ff_tokens().unwrap().is_empty());
+        assert!(!forced.compute_ff_tokens().is_empty());
         forced.cancellation_handle().unwrap().cancel();
         assert_cancelled(forced.compute_mask_or_eos());
 
