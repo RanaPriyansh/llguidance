@@ -374,6 +374,59 @@ choices: {alternatives}
     }
 
     #[test]
+    fn cancellation_while_copying_skip_row_does_not_panic() {
+        let alternatives = (0..1000)
+            .map(|i| format!("r{i}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let mut grammar = format!(
+            "start: \"x\" choices
+choices: {alternatives}
+%ignore /[ ]+/
+"
+        );
+        for i in 0..1000 {
+            grammar.push_str(&format!(
+                "r{i}: \"a{i}\"
+"
+            ));
+        }
+
+        let env = ApproximateTokEnv::single_byte_env();
+        let mut factory = ParserFactory::new(&env, InferenceCapabilities::default(), &[]).unwrap();
+        factory.quiet();
+        let mut parser = factory
+            .create_parser(TopLevelGrammar::from_lark(grammar))
+            .unwrap();
+        parser.start_without_prompt();
+        parser.parser.apply_token(b"x", b'x' as u32).unwrap();
+        parser.parser.apply_token(b" ", b' ' as u32).unwrap();
+
+        let handle = CancellationHandle::default();
+        parser.parser.set_cancellation_handle(handle.clone());
+        let (reached_tx, reached_rx) = mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+        let worker = thread::spawn(move || {
+            PROGRESS.with_borrow_mut(|p| {
+                *p = Some(Progress {
+                    point: "skip",
+                    work: 0,
+                    threshold: 32,
+                    reached: reached_tx,
+                    resume: resume_rx,
+                })
+            });
+            parser.parser.apply_token(b"a", b'a' as u32)
+        });
+
+        reached_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        handle.cancel();
+        resume_tx.send(()).unwrap();
+        let result = worker.join().expect("skip cancellation panicked");
+        assert_cancelled(result.map(|_| ()));
+    }
+
+    #[test]
     fn cancellation_inside_lexer_does_not_publish_partial_transition() {
         let grammar = (0..128)
             .map(|i| format!("/[a-z]{{{}}}/", i + 1))

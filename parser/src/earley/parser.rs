@@ -1815,8 +1815,13 @@ impl ParserState {
         let mut lex_start = Some(self.rows[self.num_rows() - 1].lexer_start_state);
 
         for i in src {
+            if self.is_cancelled() {
+                return false;
+            }
             self.scratch
                 .just_add_idx(self.scratch.items[i], i, "skip_lexeme");
+            #[cfg(test)]
+            crate::cancellation::checkpoint("skip");
         }
 
         let (mut grammar_id, max_token_ptr) = self.maybe_pop_grammar_stack(lexeme.idx);
@@ -1845,6 +1850,9 @@ impl ParserState {
         // A max-token pop moves to the parent grammar, whose skip has not been consumed.
         let allow_skip = hit_max_tokens || skip_repetition == SkipRepetition::Unbounded;
         let push_res = self.just_push_row(grammar_id, lex_start, allow_skip);
+        if !push_res && self.is_cancelled() {
+            return false;
+        }
         assert!(push_res);
 
         true
